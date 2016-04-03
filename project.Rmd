@@ -1,0 +1,86 @@
+---
+title: "Predicting Exercise Quality Using Human Activity Recognition (HAR)"
+author: "Jeneen Sommers"
+output: html_document
+---
+### Summary
+Data collected from motion sensors on subjects and exercise equipment are used to create a model that predicts whether or not exercises are being done correctly.  I used a random forest model, which results in over 99% prediction accuracy.
+
+### Data
+The [data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) were collected from 4 motion sensors on each of 6 subjects and their dumbells.  The subjects were instructed to perform bicep curls either correcly, or incorrectly in 1 of 4 different ways.  38 variables were measured or calculated for each sensor.  There are additional metadata variables, and one variable to indicate whether the exercise was done correctly or how it was done incorrectly.  This last variable ('classe') is the variable the model will try to predict. More information about the experiment, including publications, can be found at http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises.
+
+The supplied [testing set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) will be used to check the prediction power of the model.  Note that the test data set does not contain the 'classe' variable, and so cannot be used to check the model predictions.
+
+### Exploratory Analysis
+```{r include=FALSE}
+require(caret)
+require(ggplot2)
+require(randomForest)
+set.seed(8746)
+```
+
+A cursory look at the data shows that many variables contain mostly missing values, in the form of 'NAs', blanks, or '#DIV/0!'.  Variables with mostly missing values will not make good predictors and will not be included in the data used to build the model, nor will metadata variables.
+
+```{r}
+data <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings=c("NA","","#DIV/0!"))
+missing = sapply(data, function(x) {sum(is.na(x))})
+notMissing <- names(missing[missing==0])
+nonPredictors <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp","num_window","new_window")
+cleanData <- data[,names(data) %in% notMissing & !names(data) %in% nonPredictors]
+```
+
+Since the predictions can't be compared to the testing set, I subset a small set of the training data to be used for cross-validation.  I have read that cross-validation is not necessary with random forest methods - it's done internally - but I would like to see what the results look like before making the final predictions.
+
+```{r}
+inTrain <- createDataPartition(cleanData$classe, p=0.9, list=FALSE)
+training <- cleanData[inTrain,]
+validation <- cleanData[-inTrain,]
+```
+
+### The Model
+Random Forest was chosen to model this data because it is an accurate, though compute intensive, modelling technique for non-linear systems.  
+```{r} 
+modRF90 <- train(classe~.,data=training, method="rf")
+```
+
+A look at the error rates for the classe variable given by the model show that the errors drop to a steady rate after about 40 trees, and that the error rates for classe=B or D are slightly higher than for classe=A or E.  Errors for D and the internally calculatetd Out of Bag (OOB) errors are about midway between the two.
+
+``` {r}
+plot(modRF90$finalModel, xlim=c(0,100), main="Random Forest Final Model")
+legend("topright", colnames(modRF90$finalModel$err.rate), col=1:6, cex=0.8, fill=1:6)
+```
+
+A printout of the final fit show an OOB of 0.53%, which is very promising..
+
+```{r}
+modRF90$finalModel
+```
+
+###Predictions
+I first run the model on the validation set I put aside and look at those results.
+
+```{r}
+pred90 <- predict(modRF90, validation)
+validation$predRight <- pred90==validation$classe
+validation$predRight <- factor(validation$predRight, levels=c("TRUE", "FALSE"))
+confusionMatrix(validation$classe, pred90)$overall['Accuracy']
+table(pred90, validation$classe)
+```
+
+The results are very good, with an accuracy of over 99%.  It might be interesting to see where the missed classifications are.  varImp shows that the two most important predictors are roll_belt and yaw_belt, and so will use them to look at the missed values.
+
+```{r}
+p <- qplot(roll_belt,yaw_belt,data=validation, colour=predRight) + facet_grid(classe~.) + labs(title="Predictions for Validation Set", colour="Prediction")
+p + geom_point(aes(x=roll_belt, y=yaw_belt), colour="skyblue2", data=validation[validation$predRight=="FALSE",])
+```
+
+You can see that each classe has a different pattern in roll_belt and yaw_belt, though there is some overlap and that's where the blue misclassified values are, with the one exception of the miscalssified E point.  I'm happy with the results overall and so apply this model to the testing set.
+
+```{r}
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+predTest <- predict(modRF90, testing)
+predTest
+```
+
+### Conclusions
+Random Forest modelling worked very well on this dataset, with an overall accuracy of over 99%. 
